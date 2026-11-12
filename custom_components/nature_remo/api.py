@@ -1,3 +1,4 @@
+import json
 import logging
 import aiohttp
 
@@ -79,29 +80,37 @@ class NatureRemoAPI:
             aiohttp.ClientSession() as session,
             session.post(api_url, headers=headers, data=payload) as response,
         ):
-            # レート制限系のヘッダを取得・ログ出力
+            # レート制限系のヘッダを取得・ログ出力（ヘッダ欠落時も落ちないようにする）
             rate_limit = response.headers.get("X-Rate-Limit-Limit")
             rate_remaining = response.headers.get("X-Rate-Limit-Remaining")
-            rate_reset = datetime.fromtimestamp(
-                int(response.headers.get("X-Rate-Limit-Reset"))
-            )
+            rate_reset_raw = response.headers.get("X-Rate-Limit-Reset")
+            try:
+                rate_reset = datetime.fromtimestamp(int(rate_reset_raw))
+            except (TypeError, ValueError):
+                rate_reset = None
 
-            # デバッグログにリクエスト情報を出力
             _LOGGER.debug(
-                f"NatureRemo RateLimit → Limit: {rate_limit}, Remaining: {rate_remaining}, Reset: {rate_reset}"
+                f"NatureRemoRateLimit → Limit: {rate_limit}, Remaining: {rate_remaining}, Reset: {rate_reset}"
             )
 
-            response_json = await response.json()
-            if response.status == 200:
-                _LOGGER.info(
-                    "エアコンの操作に成功しました: %s",
-                    response_json,
+            text = await response.text()
+            if response.status != 200:
+                # [custom] 失敗時はエラー本文を状態として扱わせないため None を返す
+                _LOGGER.warning(
+                    "エアコンの操作に失敗しました / Aircon command failed: status=%s, remaining=%s, reset=%s, payload=%s, body=%s",
+                    response.status,
+                    rate_remaining,
+                    rate_reset,
+                    payload,
+                    text[:500],
                 )
-            else:
-                _LOGGER.error(
-                    "エアコンの操作に失敗しました: %s",
-                    await response.text(),
-                )
+                return None
+            try:
+                response_json = json.loads(text)
+            except ValueError:
+                _LOGGER.warning("エアコン操作の応答がJSONではありません: %s", text[:500])
+                return None
+            _LOGGER.info("エアコンの操作に成功しました: %s", response_json)
             return response_json
 
     async def send_light_command(self, appliance_id: str, command: str):

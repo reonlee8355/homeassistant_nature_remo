@@ -421,9 +421,19 @@ class NatureRemoClimate(ClimateEntity):
         if appliance and "settings" in appliance:
             _LOGGER.info("***Nature Remo Settings: %s", appliance["settings"])
             # 動作モード
-            self._hvac_mode = self.get_remo_mode_to_hvac_mode(
+            # [custom] 不明なmodeでは前回値を保持（Noneで「不明」表示になるのを防ぐ）
+            new_mode = self.get_remo_mode_to_hvac_mode(
                 appliance["settings"].get("mode", "")
             )
+            if new_mode is not None:
+                self._hvac_mode = new_mode
+            else:
+                _LOGGER.warning(
+                    "[%s] Unknown mode in settings: %s (keeping %s)",
+                    self._attr_name,
+                    appliance["settings"].get("mode"),
+                    self._hvac_mode,
+                )
             # ボタン（OFFボタン）
             self._button = appliance["settings"].get("button", "")
 
@@ -464,6 +474,15 @@ class NatureRemoClimate(ClimateEntity):
         # schedule_update_ha_state()を使用する（スレッドセーフ）
         # async_write_ha_state() is not thread-safe; use schedule_update_ha_state() instead
         self.schedule_update_ha_state()
+
+    async def _handle_command_failure(self) -> None:
+        """[custom] 操作失敗時：状態は変更せず、coordinatorに再取得を依頼する."""
+        _LOGGER.warning(
+            "[%s] Command failed; keeping current state and requesting refresh",
+            self._attr_name,
+        )
+        self.async_write_ha_state()
+        await self._coordinator.async_request_refresh()
 
     def get_remo_mode_to_hvac_mode(self, remo_mode) -> HVACMode | None:
         """
@@ -569,18 +588,30 @@ class NatureRemoClimate(ClimateEntity):
             self._button = ""
             self._hvac_mode = hvac_mode
 
+        prev_mode, prev_button = self._hvac_mode, self._button
         response = await self._api.send_command_climate(payload, self._appliance_id)
         _LOGGER.info("Set HVACMode: %s", response)
-        self._hvac_mode = self.get_remo_mode_to_hvac_mode(response.get("mode", ""))
+        if not isinstance(response, dict):
+            # [custom] 送信失敗：表示を元に戻し、クラウドの実状態を取り直す
+            self._hvac_mode, self._button = prev_mode, prev_button
+            await self._handle_command_failure()
+            return
+
+        new_mode = self.get_remo_mode_to_hvac_mode(response.get("mode", ""))
+        if new_mode is not None:
+            self._hvac_mode = new_mode
         if self._hvac_mode is HVACMode.FAN_ONLY:
             temp = "0.0"
         else:
-            temp = response.get("temp", "25.0")
-        self._target_temperature = float(temp)
-        self._fan_mode = response.get("vol", "auto")
-        self._swing_mode = response.get("dir", "auto")
-        self._swing_horizontal_mode = response.get("dirh", "")
-        self._button = response.get("button", "")
+            temp = response.get("temp") or self._target_temperature
+        try:
+            self._target_temperature = float(temp)
+        except (TypeError, ValueError):
+            pass
+        self._fan_mode = response.get("vol", self._fan_mode)
+        self._swing_mode = response.get("dir", self._swing_mode)
+        self._swing_horizontal_mode = response.get("dirh", self._swing_horizontal_mode)
+        self._button = response.get("button", self._button)
 
         self.async_write_ha_state()
 
@@ -604,7 +635,10 @@ class NatureRemoClimate(ClimateEntity):
             "temperature": set_temperature,
         }
 
-        await self._api.send_command_climate(payload, self._appliance_id)
+        response = await self._api.send_command_climate(payload, self._appliance_id)
+        if not isinstance(response, dict):
+            await self._handle_command_failure()
+            return
         self._target_temperature = temperature
         self._button = ""
         self.async_write_ha_state()
@@ -627,7 +661,10 @@ class NatureRemoClimate(ClimateEntity):
             "air_volume": fan_mode,
         }
 
-        await self._api.send_command_climate(payload, self._appliance_id)
+        response = await self._api.send_command_climate(payload, self._appliance_id)
+        if not isinstance(response, dict):
+            await self._handle_command_failure()
+            return
         self._fan_mode = fan_mode
         self._button = ""
         self.async_write_ha_state()
@@ -644,7 +681,10 @@ class NatureRemoClimate(ClimateEntity):
             "air_direction": swing_mode,
         }
 
-        await self._api.send_command_climate(payload, self._appliance_id)
+        response = await self._api.send_command_climate(payload, self._appliance_id)
+        if not isinstance(response, dict):
+            await self._handle_command_failure()
+            return
         self._swing_mode = swing_mode
         self._button = ""
         self.async_write_ha_state()
@@ -667,7 +707,10 @@ class NatureRemoClimate(ClimateEntity):
             "air_direction_h": swing_horizontal_mode,
         }
 
-        await self._api.send_command_climate(payload, self._appliance_id)
+        response = await self._api.send_command_climate(payload, self._appliance_id)
+        if not isinstance(response, dict):
+            await self._handle_command_failure()
+            return
         self._swing_horizontal_mode = swing_horizontal_mode
         self._button = ""
         self.async_write_ha_state()
