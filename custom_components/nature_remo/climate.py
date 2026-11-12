@@ -105,6 +105,7 @@ class NatureRemoClimate(ClimateEntity):
             self._target_temperature = 25
             self._fan_mode = "auto"
             self._swing_mode = "auto"
+            self._swing_horizontal_mode = "auto"
             self._aircon_range_modes = {}
 
             # [Issue#4] entry_idを保持（optionsはself.hassから都度取得する）
@@ -134,6 +135,10 @@ class NatureRemoClimate(ClimateEntity):
             support_feature = support_feature | ClimateEntityFeature.FAN_MODE
         if self.swing_modes:
             support_feature = support_feature | ClimateEntityFeature.SWING_MODE
+        if self.swing_horizontal_modes:
+            support_feature = (
+                support_feature | ClimateEntityFeature.SWING_HORIZONTAL_MODE
+            )
 
         _LOGGER.info(f"Nature Remo Climate support_feature: {support_feature}")
         return support_feature
@@ -226,7 +231,34 @@ class NatureRemoClimate(ClimateEntity):
     def swing_modes(self) -> list[str] | None:
         """設定可能な風向きのリスト. / List of available swing modes."""
         remo_mode = MODE_MAP.get(self._hvac_mode)
-        return self._aircon_range_modes.get(remo_mode, {}).get("dir", [])
+        modes = self._aircon_range_modes.get(remo_mode, {}).get("dir", [])
+        modes = [mode for mode in modes if mode not in (None, "")]
+
+        if not modes:
+            return None
+
+        if self._swing_mode not in (None, "") and self._swing_mode not in modes:
+            modes.append(self._swing_mode)
+
+        return modes
+
+    @property
+    def swing_horizontal_modes(self) -> list[str] | None:
+        """設定可能な横風向きのリスト. / List of horizontal swing modes."""
+        remo_mode = MODE_MAP.get(self._hvac_mode)
+        modes = self._aircon_range_modes.get(remo_mode, {}).get("dirh", [])
+        modes = [mode for mode in modes if mode not in (None, "")]
+
+        if not modes:
+            return None
+
+        if (
+            self._swing_horizontal_mode not in (None, "")
+            and self._swing_horizontal_mode not in modes
+        ):
+            modes.append(self._swing_horizontal_mode)
+
+        return modes
 
     @property
     def target_temperature(self) -> float | None:
@@ -241,7 +273,16 @@ class NatureRemoClimate(ClimateEntity):
     @property
     def swing_mode(self) -> str | None:
         """現在の風向きを返す. / Return the current swing mode."""
+        if not self.swing_modes:
+            return None
         return self._swing_mode
+
+    @property
+    def swing_horizontal_mode(self) -> str | None:
+        """現在の横風向きを返す. / Return the horizontal swing mode."""
+        if not self.swing_horizontal_modes:
+            return None
+        return self._swing_horizontal_mode
 
     def _get_external_sensor_value(self, sensor_type: str) -> float | None:
         """
@@ -397,6 +438,8 @@ class NatureRemoClimate(ClimateEntity):
             self._fan_mode = appliance["settings"].get("vol", "auto")
             # 風向き
             self._swing_mode = appliance["settings"].get("dir", "auto")
+            # 横風向き
+            self._swing_horizontal_mode = appliance["settings"].get("dirh", "")
 
         # aircon_range_mode
         if appliance and "aircon" in appliance:
@@ -536,6 +579,7 @@ class NatureRemoClimate(ClimateEntity):
         self._target_temperature = float(temp)
         self._fan_mode = response.get("vol", "auto")
         self._swing_mode = response.get("dir", "auto")
+        self._swing_horizontal_mode = response.get("dirh", "")
         self._button = response.get("button", "")
 
         self.async_write_ha_state()
@@ -602,5 +646,28 @@ class NatureRemoClimate(ClimateEntity):
 
         await self._api.send_command_climate(payload, self._appliance_id)
         self._swing_mode = swing_mode
+        self._button = ""
+        self.async_write_ha_state()
+
+    async def async_set_swing_horizontal_mode(
+        self, swing_horizontal_mode: str
+    ) -> None:
+        """横風向きを変更. / Change the horizontal swing mode."""
+        if not self.swing_horizontal_modes:
+            _LOGGER.info("[%s] Horizontal swing is not supported.", self._attr_name)
+            return
+
+        operation_mode = MODE_MAP.get(self._hvac_mode)
+        if operation_mode is None:
+            _LOGGER.error("Invalid HVAC mode: %s", self._hvac_mode)
+            return
+
+        payload = {
+            "operation_mode": operation_mode,
+            "air_direction_h": swing_horizontal_mode,
+        }
+
+        await self._api.send_command_climate(payload, self._appliance_id)
+        self._swing_horizontal_mode = swing_horizontal_mode
         self._button = ""
         self.async_write_ha_state()
