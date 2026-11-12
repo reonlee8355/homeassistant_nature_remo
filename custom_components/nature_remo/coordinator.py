@@ -11,7 +11,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 _LOGGER = logging.getLogger(__name__)
 
 # [custom] 残り回数がこれ以下なら定期取得を止め、HAからの操作用に残す
-RATE_LIMIT_RESERVE = 5
+# （エアコン10台を一度に操作しても足りるよう、余裕をもたせている）
+RATE_LIMIT_RESERVE = 12
 
 
 class NatureRemoCoordinator(DataUpdateCoordinator):

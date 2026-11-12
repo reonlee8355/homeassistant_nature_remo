@@ -482,6 +482,17 @@ class NatureRemoClimate(ClimateEntity):
             self._attr_name,
         )
         self.async_write_ha_state()
+        # [custom] 失敗をイベントで通知する（オートメーションでHA通知・スマホ通知に使う）
+        self.hass.bus.async_fire(
+            "nature_remo_command_failed",
+            {
+                "entity_id": self.entity_id,
+                "name": self._attr_name,
+                "status": self._api.last_command_status,
+                "rate_limited": self._api.is_rate_limited(),
+                "rate_limit_remaining": self._api.rate_limit_remaining,
+            },
+        )
         if self._api.is_rate_limited():
             # 429中に取り直すと制限が長引くため、リセット後の定期取得に任せる
             return

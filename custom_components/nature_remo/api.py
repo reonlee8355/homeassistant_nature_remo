@@ -24,6 +24,8 @@ class NatureRemoAPI:
         self.rate_limit_remaining: int | None = None
         self.rate_limit_reset: datetime | None = None
         self.rate_limited_until: datetime | None = None
+        # [custom] 直近の操作失敗のHTTPステータス（通知用。通信エラー等は0）
+        self.last_command_status: int | None = None
 
     def _record_rate_limit(self, response) -> None:
         """[custom] レスポンスヘッダからレート制限の状態を記録する."""
@@ -130,6 +132,7 @@ class NatureRemoAPI:
 
             self._record_rate_limit(response)
             text = await response.text()
+            self.last_command_status = response.status
             if response.status != 200:
                 # [custom] 失敗時はエラー本文を状態として扱わせないため None を返す
                 _LOGGER.warning(
