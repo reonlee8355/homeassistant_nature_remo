@@ -2,7 +2,7 @@ import json
 import logging
 import aiohttp
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 _LOGGER = logging.getLogger(__name__)
 NATURE_REMO_URL = "https://api.nature.global/1"
@@ -20,6 +20,48 @@ class NatureRemoAPI:
         Initialize the Nature Remo API.
         """
         self._token = token
+        # [custom] レート制限の状態（429対策）
+        self.rate_limit_remaining: int | None = None
+        self.rate_limit_reset: datetime | None = None
+        self.rate_limited_until: datetime | None = None
+
+    def _record_rate_limit(self, response) -> None:
+        """[custom] レスポンスヘッダからレート制限の状態を記録する."""
+        try:
+            self.rate_limit_remaining = int(response.headers.get("X-Rate-Limit-Remaining"))
+        except (TypeError, ValueError):
+            self.rate_limit_remaining = None
+        try:
+            self.rate_limit_reset = datetime.fromtimestamp(
+                int(response.headers.get("X-Rate-Limit-Reset"))
+            )
+        except (TypeError, ValueError):
+            self.rate_limit_reset = None
+        if response.status == 429:
+            # リセット時刻が不明なら60秒待つ
+            self.rate_limited_until = self.rate_limit_reset or (
+                datetime.now() + timedelta(seconds=60)
+            )
+            _LOGGER.warning(
+                "Nature Remo APIのレート制限に達しました（429）。%s まで定期取得を控えます",
+                self.rate_limited_until,
+            )
+
+    def is_rate_limited(self) -> bool:
+        """[custom] 429を受けてからリセット時刻までの間はTrue."""
+        return (
+            self.rate_limited_until is not None
+            and datetime.now() < self.rate_limited_until
+        )
+
+    def is_budget_low(self, reserve: int) -> bool:
+        """[custom] 残り回数がreserve以下で、リセット前ならTrue（操作用に回数を残す）."""
+        return (
+            self.rate_limit_remaining is not None
+            and self.rate_limit_remaining <= reserve
+            and self.rate_limit_reset is not None
+            and datetime.now() < self.rate_limit_reset
+        )
 
     async def _get(self, path: str):
         """
@@ -32,19 +74,12 @@ class NatureRemoAPI:
             aiohttp.ClientSession() as session,
             session.get(url, headers=headers) as response,
         ):
-            if response.status == 429:
-                _LOGGER.warning("API制限に達しました! 429 Too Many Requests.")
-
-            # レート制限系のヘッダを取得・ログ出力
-            rate_limit = response.headers.get("X-Rate-Limit-Limit")
-            rate_remaining = response.headers.get("X-Rate-Limit-Remaining")
-            rate_reset = response.headers.get("X-Rate-Limit-Reset")
-            # rate_resetを読める時間に変換する
-            reset_time = datetime.fromtimestamp(int(rate_reset))
-
-            # デバッグログにリクエスト情報を出力する
+            # [custom] レート制限の状態を記録（ヘッダ欠落でも落ちない）
+            self._record_rate_limit(response)
             _LOGGER.debug(
-                f"NatureRemo RateLimit → Limit: {rate_limit}, Remaining: {rate_remaining}, Reset: {reset_time}"
+                "NatureRemo RateLimit → Remaining: %s, Reset: %s",
+                self.rate_limit_remaining,
+                self.rate_limit_reset,
             )
 
             if response.status == 200:
@@ -93,6 +128,7 @@ class NatureRemoAPI:
                 f"NatureRemoRateLimit → Limit: {rate_limit}, Remaining: {rate_remaining}, Reset: {rate_reset}"
             )
 
+            self._record_rate_limit(response)
             text = await response.text()
             if response.status != 200:
                 # [custom] 失敗時はエラー本文を状態として扱わせないため None を返す

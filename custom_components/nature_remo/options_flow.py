@@ -48,7 +48,7 @@ class NatureRemoOptionsFlowHandler(config_entries.OptionsFlow):
         interval_default = options.get("update_interval", 60)
         data_schema = {
             vol.Optional(interval_label, default=interval_default): vol.In(
-                [30, 60, 90]
+                [30, 60, 90, 120, 180]
             ),
         }
 

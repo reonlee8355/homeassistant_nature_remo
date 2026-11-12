@@ -10,6 +10,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 _LOGGER = logging.getLogger(__name__)
 
+# [custom] 残り回数がこれ以下なら定期取得を止め、HAからの操作用に残す
+RATE_LIMIT_RESERVE = 5
+
 
 class NatureRemoCoordinator(DataUpdateCoordinator):
     """
@@ -37,10 +40,31 @@ class NatureRemoCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """APIを1回だけ呼び、各アプライアンスの情報を取得."""
         _LOGGER.info("NatureRemoCoordinator.async_update_data start.")
+        # [custom] 429後のリセット待ち中、または残り回数が少ないときは
+        # APIを呼ばず前回データを維持する（操作用に回数を残す）
+        if self.data is not None and (
+            self.api.is_rate_limited() or self.api.is_budget_low(RATE_LIMIT_RESERVE)
+        ):
+            _LOGGER.info(
+                "Nature Remo定期取得をスキップ（残り%s回、リセット%s）",
+                self.api.rate_limit_remaining,
+                self.api.rate_limit_reset,
+            )
+            return self.data
         try:
+            # [custom] 先に2つとも取得し、どちらか失敗したら前回データを維持する
+            devices = await self.api.get_devices()
+            appliances = await self.api.get_appliances() if devices is not None else None
+            if devices is None or appliances is None:
+                if self.data is not None:
+                    _LOGGER.warning(
+                        "Nature Remoのデータ取得に失敗したため前回の状態を維持します"
+                    )
+                    return self.data
+                raise UpdateFailed("Nature Remoのデータ取得に失敗しました")
+
             # Remoデバイス本体（温湿度センサーなど）の処理
             self.devices = {}
-            devices = await self.api.get_devices()
             for device in devices:
                 device_id = device.get("id")
                 name = device.get("name", "Unnamed")
@@ -76,7 +100,6 @@ class NatureRemoCoordinator(DataUpdateCoordinator):
             self.smart_meters = {}
             self.ir_remotes = {}
 
-            appliances = await self.api.get_appliances()
 
             for appliance in appliances:
                 appliance_type = appliance.get("type")

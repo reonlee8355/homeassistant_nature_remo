@@ -482,6 +482,9 @@ class NatureRemoClimate(ClimateEntity):
             self._attr_name,
         )
         self.async_write_ha_state()
+        if self._api.is_rate_limited():
+            # 429中に取り直すと制限が長引くため、リセット後の定期取得に任せる
+            return
         await self._coordinator.async_request_refresh()
 
     def get_remo_mode_to_hvac_mode(self, remo_mode) -> HVACMode | None:
