@@ -1,6 +1,7 @@
 import logging
 import voluptuous as vol
 from homeassistant.components.climate import (
+    ATTR_HVAC_MODE,
     ClimateEntity,
     ClimateEntityFeature,
     HVACMode,
@@ -634,6 +635,18 @@ class NatureRemoClimate(ClimateEntity):
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is None:
             _LOGGER.warning("温度が指定されていません！")
+            return
+
+        # OFF中に温度だけが届いたときは送らない（送るとエアコンがONになるため）。
+        # HAアプリが画面を開いた瞬間に意図しない温度を送る現象への安全策（custom.4）。
+        # モード指定つきの呼び出し（ONにして温度も変える）は従来どおり通す。
+        if self._button == "power-off" and not kwargs.get(ATTR_HVAC_MODE):
+            _LOGGER.warning(
+                "%s: OFF中の温度変更（%s）は送信しません（ONにしないため）",
+                self.entity_id,
+                temperature,
+            )
+            self.async_write_ha_state()
             return
 
         operation_mode = MODE_MAP.get(self._hvac_mode)
